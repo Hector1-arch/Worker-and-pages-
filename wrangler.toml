@@ -1,0 +1,4 @@
+
+name = "worker-and-pages"
+main = "src/index.js"
+compatibility_date = "2026-11-16"
