@@ -2,3 +2,11 @@
 name = "worker-and-pages"
 main = "src/index.js"
 compatibility_date = "2026-11-16"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[exports.Room]
+type = "durable-object"
+storage = "sqlite"
