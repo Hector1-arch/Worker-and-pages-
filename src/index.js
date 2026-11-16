@@ -1,24 +1,88 @@
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const url = new URL(request.url);
+    const parts = url.pathname.split("/").filter(Boolean);
 
-    if (url.pathname !== "/ws") {
-      return new Response("WebSocket Server Online!");
+    if (parts[0] !== "room" || !parts[1]) {
+      return new Response("Not found", { status: 404 });
     }
 
+    const roomId = parts[1];
+
+    const id = env.ROOMS.idFromName(roomId);
+    const stub = env.ROOMS.get(id);
+
+    return stub.fetch(request);
+  }
+};
+
+export class Room {
+  constructor(state) {
+    this.state = state;
+    this.sessions = new Map();
+  }
+
+  async fetch(request) {
     if (request.headers.get("Upgrade") !== "websocket") {
-      return new Response("WebSocket Required", { status: 426 });
+      return new Response("Expected WebSocket", { status: 426 });
     }
 
-    const pair = new WebSocketPair();
-    const client = pair[0];
-    const server = pair[1];
+    const url = new URL(request.url);
+    const name = url.searchParams.get("name") || "Anonymous";
+    const userId = url.searchParams.get("userId");
 
+    // Alte Verbindung desselben Benutzers schließen
+    for (const [id, session] of this.sessions) {
+      if (session.userId === userId) {
+        try {
+          session.ws.close(1000, "Reconnecting");
+        } catch {}
+
+        this.sessions.delete(id);
+      }
+    }
+
+    const [client, server] = Object.values(new WebSocketPair());
     server.accept();
 
-    server.addEventListener("message", (event) => {
-      server.send("Echo: " + event.data);
+    const sessionId = crypto.randomUUID();
+
+    this.sessions.set(sessionId, {
+      ws: server,
+      name,
+      userId
+    });
+
+    this.broadcast(
+      { type: "joined", user: name },
+      sessionId
+    );
+
+    this.broadcast({
+      type: "members",
+      members: [...this.sessions.values()].map(s => s.name)
+    }, null);
+
+    server.addEventListener("message", event => {
+      try {
+        const msg = JSON.parse(event.data);
+        this.broadcast(msg, sessionId);
+      } catch {}
+    });
+
+    server.addEventListener("close", () => {
+      this.sessions.delete(sessionId);
+
+      this.broadcast(
+        { type: "left", user: name },
+        sessionId
+      );
+
+      this.broadcast({
+        type: "members",
+        members: [...this.sessions.values()].map(s => s.name)
+      }, null);
     });
 
     return new Response(null, {
@@ -26,4 +90,16 @@ export default {
       webSocket: client
     });
   }
-};
+
+  broadcast(msg, excludeId) {
+    const data = JSON.stringify(msg);
+
+    for (const [id, session] of this.sessions) {
+      if (id !== excludeId) {
+        try {
+          session.ws.send(data);
+        } catch {}
+      }
+    }
+  }
+}
